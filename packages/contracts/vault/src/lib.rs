@@ -172,6 +172,8 @@ pub enum ContractError {
     /// malformed protocol response. Depositing would dilute all existing
     /// holders.
     AdapterReportedNoAssets = 17,
+    /// `deposit` output fell below caller-specified minimum bound (`min_shares_out`).
+    SlippageExceeded = 18,
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +211,12 @@ impl MeridianVault {
     /// adapter, which deploys it to the underlying protocol.
     ///
     /// Returns the number of mUSDC shares minted to the caller.
-    pub fn deposit(env: Env, caller: Address, amount: i128) -> Result<i128, ContractError> {
+    pub fn deposit(
+        env: Env,
+        caller: Address,
+        amount: i128,
+        min_shares_out: i128,
+    ) -> Result<i128, ContractError> {
         caller.require_auth();
         if Self::is_paused(env.clone()) {
             return Err(ContractError::DepositsPaused);
@@ -259,6 +266,10 @@ impl MeridianVault {
 
         if shares_to_mint <= 0 {
             return Err(ContractError::DepositTooSmall);
+        }
+
+        if shares_to_mint < min_shares_out {
+            return Err(ContractError::SlippageExceeded);
         }
 
         // A caller who currently holds no shares but still has Entry/Principal
@@ -1418,7 +1429,7 @@ mod tests {
         let (_env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
 
         let amount = 100_0000000_i128;
-        let shares = vault.deposit(&user, &amount);
+        let shares = vault.deposit(&user, &amount, &0_i128);
 
         assert_eq!(shares, amount);
         assert_eq!(vault.get_position(&user), amount);
@@ -1430,7 +1441,7 @@ mod tests {
         let (env, _admin, user, usdc_id, _musdc, _adapter, vault) = setup();
 
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         let shares = vault.get_position(&user);
         let usdc_out = vault.withdraw(&user, &shares, &0_i128);
@@ -1449,15 +1460,15 @@ mod tests {
         assert_eq!(vault.get_principal(&user), 0);
 
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
         assert_eq!(vault.get_principal(&user), amount);
     }
 
     #[test]
     fn topup_accumulates_principal() {
         let (_env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
-        vault.deposit(&user, &100_0000000_i128);
-        vault.deposit(&user, &50_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
+        vault.deposit(&user, &50_0000000_i128, &0_i128);
         assert_eq!(vault.get_principal(&user), 150_0000000_i128);
     }
 
@@ -1465,7 +1476,7 @@ mod tests {
     fn partial_withdraw_reduces_principal_proportionally() {
         let (_env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         let half = vault.get_position(&user) / 2;
         vault.withdraw(&user, &half, &0_i128);
@@ -1475,7 +1486,7 @@ mod tests {
     #[test]
     fn full_withdraw_clears_principal() {
         let (_env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
 
         let shares = vault.get_position(&user);
         vault.withdraw(&user, &shares, &0_i128);
@@ -1487,7 +1498,7 @@ mod tests {
         let (env, _admin, user, usdc_id, _musdc, adapter_id, vault) = setup();
 
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         // Simulate yield: mint USDC directly to the adapter.
         StellarAssetClient::new(&env, &usdc_id).mint(&adapter_id, &10_0000000_i128);
@@ -1503,7 +1514,7 @@ mod tests {
         let (env, _admin, user, usdc_id, _musdc, adapter_id, vault) = setup();
 
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         // Simulate yield: mint 10 USDC to the adapter.
         let yield_amount = 10_0000000_i128;
@@ -1513,7 +1524,7 @@ mod tests {
         // the share price has risen.
         let user2 = Address::generate(&env);
         StellarAssetClient::new(&env, &usdc_id).mint(&user2, &10_000_000_000_i128);
-        let shares2 = vault.deposit(&user2, &amount);
+        let shares2 = vault.deposit(&user2, &amount, &0_i128);
 
         // 100 shares outstanding, vault has 110 USDC.
         // shares2 = 100 * 100 / 110 ≈ 90 shares.
@@ -1537,7 +1548,7 @@ mod tests {
         let usdc = TokenClient::new(&env, &usdc_id);
 
         let attacker_deposit = 1_i128;
-        let attacker_shares = vault.deposit(&attacker, &attacker_deposit);
+        let attacker_shares = vault.deposit(&attacker, &attacker_deposit, &0_i128);
         assert_eq!(attacker_shares, 1);
 
         // Attacker donates USDC directly to the adapter to inflate the share
@@ -1548,7 +1559,7 @@ mod tests {
         let victim = Address::generate(&env);
         let victim_deposit = 100_0000000_i128;
         StellarAssetClient::new(&env, &usdc_id).mint(&victim, &victim_deposit);
-        let victim_shares = vault.deposit(&victim, &victim_deposit);
+        let victim_shares = vault.deposit(&victim, &victim_deposit, &0_i128);
         assert!(victim_shares > 0, "victim must receive shares");
 
         let attacker_out = vault.withdraw(&attacker, &attacker_shares, &0_i128);
@@ -1577,7 +1588,7 @@ mod tests {
         let (env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
         env.ledger().set_timestamp(1_700_000_000);
 
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
         assert_eq!(vault.get_entry_time(&user), 1_700_000_000);
     }
 
@@ -1585,10 +1596,10 @@ mod tests {
     fn topup_keeps_original_entry_time() {
         let (env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
         env.ledger().set_timestamp(1_700_000_000);
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
 
         env.ledger().set_timestamp(1_700_500_000);
-        vault.deposit(&user, &50_0000000_i128);
+        vault.deposit(&user, &50_0000000_i128, &0_i128);
         assert_eq!(vault.get_entry_time(&user), 1_700_000_000);
     }
 
@@ -1596,7 +1607,7 @@ mod tests {
     fn full_withdraw_clears_entry_time() {
         let (env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
         env.ledger().set_timestamp(1_700_000_000);
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
 
         let shares = vault.get_position(&user);
         vault.withdraw(&user, &shares, &0_i128);
@@ -1607,7 +1618,7 @@ mod tests {
     fn paused_blocks_deposit() {
         let (_env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
         vault.set_paused(&true);
-        let result = vault.try_deposit(&user, &100_0000000_i128);
+        let result = vault.try_deposit(&user, &100_0000000_i128, &0_i128);
         assert_eq!(result, Err(Ok(ContractError::DepositsPaused)));
     }
 
@@ -1615,7 +1626,7 @@ mod tests {
     fn withdraw_works_while_paused() {
         let (_env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         vault.set_paused(&true);
         let shares = vault.get_position(&user);
@@ -1630,7 +1641,7 @@ mod tests {
         vault.set_paused(&false);
         assert!(!vault.is_paused());
 
-        let shares = vault.deposit(&user, &100_0000000_i128);
+        let shares = vault.deposit(&user, &100_0000000_i128, &0_i128);
         assert_eq!(shares, 100_0000000_i128);
     }
 
@@ -1689,7 +1700,7 @@ mod tests {
         let bob = Address::generate(&env);
 
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
         let shares = vault.get_position(&user);
 
         TokenClient::new(&env, &musdc_id).transfer(&user, &bob, &shares);
@@ -1712,7 +1723,7 @@ mod tests {
         let (env, _admin, user, _usdc, musdc_id, _adapter, vault) = setup();
         let bob = Address::generate(&env);
 
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
         let shares = vault.get_position(&user);
         TokenClient::new(&env, &musdc_id).transfer(&user, &bob, &shares);
 
@@ -1726,7 +1737,7 @@ mod tests {
         let bob = Address::generate(&env);
 
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
         let shares = vault.get_position(&user);
         let moved = shares / 2;
         TokenClient::new(&env, &musdc_id).transfer(&user, &bob, &moved);
@@ -1755,7 +1766,7 @@ mod tests {
         let bob = Address::generate(&env);
 
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
         let shares = vault.get_position(&user);
         TokenClient::new(&env, &musdc_id).transfer(&user, &bob, &(shares / 2));
 
@@ -1779,7 +1790,7 @@ mod tests {
         let bob = Address::generate(&env);
 
         env.ledger().with_mut(|li| li.timestamp = 12_345);
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
         assert_eq!(vault.get_entry_time(&user), 12_345);
         assert_eq!(vault.get_principal(&user), 100_0000000_i128);
 
@@ -1803,12 +1814,12 @@ mod tests {
         let bob = Address::generate(&env);
 
         env.ledger().with_mut(|li| li.timestamp = 1_000);
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
         let shares = vault.get_position(&user);
         TokenClient::new(&env, &musdc_id).transfer(&user, &bob, &shares);
 
         env.ledger().with_mut(|li| li.timestamp = 2_000);
-        vault.deposit(&user, &50_0000000_i128);
+        vault.deposit(&user, &50_0000000_i128, &0_i128);
 
         assert_eq!(vault.get_entry_time(&user), 2_000);
         assert_eq!(vault.get_principal(&user), 50_0000000_i128);
@@ -1829,7 +1840,7 @@ mod tests {
         let bob = Address::generate(&env);
 
         env.ledger().with_mut(|li| li.timestamp = 1_000);
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
         let shares = vault.get_position(&user);
         TokenClient::new(&env, &musdc_id).transfer(&user, &bob, &shares);
 
@@ -1863,7 +1874,7 @@ mod tests {
         let bob = Address::generate(&env);
 
         env.ledger().with_mut(|li| li.timestamp = 12_345);
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
         let shares = vault.get_position(&user);
         TokenClient::new(&env, &musdc_id).transfer(&user, &bob, &shares);
 
@@ -1886,7 +1897,7 @@ mod tests {
         let bob = Address::generate(&env);
 
         env.ledger().with_mut(|li| li.timestamp = 1_000);
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
         let shares = vault.get_position(&user);
         TokenClient::new(&env, &musdc_id).transfer(&user, &bob, &shares);
         assert_eq!(vault.get_entry_time(&bob), 1_000);
@@ -1894,7 +1905,7 @@ mod tests {
 
         StellarAssetClient::new(&env, &usdc_id).mint(&bob, &10_0000000_i128);
         env.ledger().with_mut(|li| li.timestamp = 99_999);
-        vault.deposit(&bob, &10_0000000_i128);
+        vault.deposit(&bob, &10_0000000_i128, &0_i128);
 
         assert_eq!(vault.get_entry_time(&bob), 1_000);
         assert_eq!(vault.get_principal(&bob), 110_0000000_i128);
@@ -1911,11 +1922,11 @@ mod tests {
         let carol = Address::generate(&env);
 
         env.ledger().with_mut(|li| li.timestamp = 1_000);
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
 
         StellarAssetClient::new(&env, &usdc_id).mint(&carol, &50_0000000_i128);
         env.ledger().with_mut(|li| li.timestamp = 5_000);
-        vault.deposit(&carol, &50_0000000_i128);
+        vault.deposit(&carol, &50_0000000_i128, &0_i128);
 
         let shares = vault.get_position(&user);
         TokenClient::new(&env, &musdc_id).transfer(&user, &carol, &shares);
@@ -1935,7 +1946,7 @@ mod tests {
         // it the way `setup()`'s `mock_all_auths()` otherwise would.
         let (env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
         let bob = Address::generate(&env);
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
 
         env.set_auths(&[]);
         let result =
@@ -1952,12 +1963,12 @@ mod tests {
         let (env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
 
         env.ledger().with_mut(|li| li.timestamp = 1_000);
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
         vault.withdraw(&user, &vault.get_position(&user), &0_i128);
         assert_eq!(vault.get_entry_time(&user), 0);
 
         env.ledger().with_mut(|li| li.timestamp = 2_000);
-        vault.deposit(&user, &50_0000000_i128);
+        vault.deposit(&user, &50_0000000_i128, &0_i128);
         assert_eq!(vault.get_entry_time(&user), 2_000);
         assert_eq!(vault.get_principal(&user), 50_0000000_i128);
     }
@@ -1976,7 +1987,7 @@ mod tests {
         let (_env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
 
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
         let result = vault.try_withdraw(&user, &(amount * 2), &0_i128);
         assert_eq!(result, Err(Ok(ContractError::InsufficientShares)));
     }
@@ -1991,14 +2002,14 @@ mod tests {
     #[test]
     fn deposit_zero_amount_fails() {
         let (_env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
-        let result = vault.try_deposit(&user, &0_i128);
+        let result = vault.try_deposit(&user, &0_i128, &0_i128);
         assert_eq!(result, Err(Ok(ContractError::ZeroAmount)));
     }
 
     #[test]
     fn withdraw_zero_shares_fails() {
         let (_env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
         let result = vault.try_withdraw(&user, &0_i128, &0_i128);
         assert_eq!(result, Err(Ok(ContractError::ZeroAmount)));
     }
@@ -2014,7 +2025,7 @@ mod tests {
     fn set_adapter_fails_with_shares_outstanding() {
         let (env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         let new_adapter_id = env.register(MockAdapter, ());
         MockAdapterClient::new(&env, &new_adapter_id).initialize(&_usdc);
@@ -2043,7 +2054,7 @@ mod tests {
         // must still succeed in that real, organically-reached empty state.
         let (env, _admin, user, usdc, musdc, _adapter, vault) = setup();
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         let musdc_balance = TokenClient::new(&env, &musdc).balance(&user);
         vault.withdraw(&user, &musdc_balance, &0_i128);
@@ -2109,7 +2120,7 @@ mod tests {
     fn migrate_adapter_moves_position_and_preserves_bookkeeping() {
         let (env, _admin, user, usdc, _musdc, _adapter, vault) = setup();
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         let new_adapter_id = env.register(MockAdapter, ());
         MockAdapterClient::new(&env, &new_adapter_id).initialize(&usdc);
@@ -2141,7 +2152,7 @@ mod tests {
     #[test]
     fn migrate_adapter_fails_with_invalid_slippage_bps() {
         let (env, _admin, user, usdc, _musdc, _adapter, vault) = setup();
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
 
         let new_adapter_id = env.register(MockAdapter, ());
         MockAdapterClient::new(&env, &new_adapter_id).initialize(&usdc);
@@ -2156,7 +2167,7 @@ mod tests {
 
         let (env, _admin, user, usdc, _musdc, adapter, vault) = setup();
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         let zero_share_adapter_id = env.register(ZeroShareMockAdapter, ());
         ZeroShareMockAdapterClient::new(&env, &zero_share_adapter_id).initialize(&usdc);
@@ -2183,7 +2194,7 @@ mod tests {
         // compounding on the wrong value.
         let (env, _admin, user, _usdc, _musdc, adapter, vault) = setup();
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0);
 
         // Corrupt the stored counter so it disagrees with the adapter's real
         // balance (which is `amount`, per MockAdapter's deposit()).
@@ -2197,7 +2208,7 @@ mod tests {
         // A second deposit should reconcile ADPT_SH to the adapter's real
         // total_shares(), not to drifted_value + this deposit's shares.
         let second_amount = 50_0000000_i128;
-        vault.deposit(&user, &second_amount);
+        vault.deposit(&user, &second_amount, &0);
 
         let adapter_real_shares = MockAdapterClient::new(&env, &adapter).total_shares();
         let stored_adpt_sh: i128 = env.as_contract(&vault.address, || {
@@ -2216,7 +2227,7 @@ mod tests {
     #[test]
     fn migrate_adapter_fails_to_same_adapter() {
         let (_env, _admin, user, _usdc, _musdc, adapter, vault) = setup();
-        vault.deposit(&user, &100_0000000_i128);
+        vault.deposit(&user, &100_0000000_i128, &0_i128);
 
         let result = vault.try_migrate_adapter(&adapter, &0);
         assert_eq!(result, Err(Ok(ContractError::SameAdapter)));
@@ -2228,7 +2239,7 @@ mod tests {
 
         let (env, _admin, user, usdc, _musdc, adapter, vault) = setup();
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         let lossy_adapter_id = env.register(LossyMockAdapter, ());
         LossyMockAdapterClient::new(&env, &lossy_adapter_id).initialize(&usdc);
@@ -2249,7 +2260,7 @@ mod tests {
 
         let (env, _admin, user, usdc, _musdc, adapter, vault) = setup();
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         let lossy_adapter_id = env.register(LossyMockAdapter, ());
         LossyMockAdapterClient::new(&env, &lossy_adapter_id).initialize(&usdc);
@@ -2349,7 +2360,7 @@ mod tests {
         let vault_id = env.register(MeridianVault, ());
         let vault = MeridianVaultClient::new(&env, &vault_id);
         let user = Address::generate(&env);
-        let result = vault.try_deposit(&user, &100_0000000_i128);
+        let result = vault.try_deposit(&user, &100_0000000_i128, &0_i128);
         assert_eq!(result, Err(Ok(ContractError::NotInitialized)));
     }
 
@@ -2380,13 +2391,13 @@ mod tests {
         let (env, _admin, user, usdc_id, _musdc, adapter_id, vault) = setup();
 
         // Seed the vault with a 1-stroop deposit so total_shares > 0.
-        vault.deposit(&user, &1_i128);
+        vault.deposit(&user, &1_i128, &0_i128);
 
         // Inflate the adapter's USDC balance to make the share price enormous.
         StellarAssetClient::new(&env, &usdc_id).mint(&adapter_id, &1_000_000_000_i128);
 
         // 1-stroop deposit now rounds down to 0 shares.
-        let result = vault.try_deposit(&user, &1_i128);
+        let result = vault.try_deposit(&user, &1_i128, &0_i128);
         assert_eq!(result, Err(Ok(ContractError::DepositTooSmall)));
     }
 
@@ -2406,7 +2417,7 @@ mod tests {
         let (env, _admin, user, usdc_id, _musdc, adapter_id, vault) = setup();
 
         let deposit = 1_000_000_000_i128;
-        vault.deposit(&user, &deposit);
+        vault.deposit(&user, &deposit, &0_i128);
 
         // Drain the adapter's USDC balance down to 1 stroop. mock_all_auths lets
         // us transfer from any address without a real signature.
@@ -2427,7 +2438,7 @@ mod tests {
         let (env, _admin, user, usdc_id, _musdc, adapter_id, vault) = setup();
 
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         // Drain the adapter's USDC balance to zero so total_assets() returns 0,
         // simulating a malformed DeFindex response.
@@ -2436,8 +2447,43 @@ mod tests {
 
         let user2 = Address::generate(&env);
         StellarAssetClient::new(&env, &usdc_id).mint(&user2, &100_0000000_i128);
-        let result = vault.try_deposit(&user2, &100_0000000_i128);
+        let result = vault.try_deposit(&user2, &100_0000000_i128, &0_i128);
         assert_eq!(result, Err(Ok(ContractError::AdapterReportedNoAssets)));
+    }
+
+    // Slippage bounds tests ---------------------------------------------------
+
+    #[test]
+    fn deposit_enforces_min_shares_out_success() {
+        let (_env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
+
+        let amount = 100_0000000_i128;
+        // Exact shares expected is 100_0000000; min_shares_out = 100_0000000 should succeed.
+        let shares = vault.deposit(&user, &amount, &100_0000000_i128);
+        assert_eq!(shares, 100_0000000_i128);
+
+        // Submitting with a lower floor (e.g. 95 USDC shares) also succeeds.
+        let shares2 = vault.deposit(&user, &amount, &95_0000000_i128);
+        assert_eq!(shares2, 100_0000000_i128);
+    }
+
+    #[test]
+    fn deposit_fails_when_shares_below_min_shares_out() {
+        let (env, _admin, user, usdc_id, _musdc, adapter_id, vault) = setup();
+
+        let amount = 100_0000000_i128;
+        vault.deposit(&user, &amount, &0_i128);
+
+        // Simulate yield: mint 10 USDC to adapter so share price increases.
+        StellarAssetClient::new(&env, &usdc_id).mint(&adapter_id, &10_0000000_i128);
+
+        let user2 = Address::generate(&env);
+        StellarAssetClient::new(&env, &usdc_id).mint(&user2, &10_000_000_000_i128);
+
+        // With yield, depositing 100 USDC yields ~90.9 shares.
+        // If caller demands at least 100 shares, it must revert with SlippageExceeded.
+        let result = vault.try_deposit(&user2, &amount, &100_0000000_i128);
+        assert_eq!(result, Err(Ok(ContractError::SlippageExceeded)));
     }
 
     // Acceptance-criteria tests for the refresh() cache mechanism -----------
@@ -2447,7 +2493,7 @@ mod tests {
         let (env, _admin, user, usdc_id, _musdc_id, adapter_id, vault) = setup_cached();
 
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         // Simulate yield accruing inside the underlying protocol: USDC lands
         // directly in the adapter without going through deposit(), so the
@@ -2463,7 +2509,7 @@ mod tests {
         // adapter-only fix could not solve.
         let user2 = Address::generate(&env);
         StellarAssetClient::new(&env, &usdc_id).mint(&user2, &10_000_000_000_i128);
-        let shares2 = vault.deposit(&user2, &amount);
+        let shares2 = vault.deposit(&user2, &amount, &0_i128);
 
         assert!(
             shares2 < amount,
@@ -2481,7 +2527,7 @@ mod tests {
         let (env, _admin, user, usdc_id, _musdc_id, adapter_id, vault) = setup_cached();
 
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         // Simulate yield accruing directly in the adapter, same as above: the
         // adapter's cached total_assets() is stale until refresh() runs.
@@ -2509,7 +2555,7 @@ mod tests {
         let (env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
 
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
 
         // Sanity ceiling, not a tight bound: deposit() (which now includes the
         // refresh() call ahead of pricing) should stay well under a generous
@@ -2607,8 +2653,8 @@ mod tests {
             StellarAssetClient::new(&env, &usdc_id).mint(&user_a, &10_000_000_i128);
             StellarAssetClient::new(&env, &usdc_id).mint(&user_b, &10_000_i128);
 
-            vault.deposit(&user_a, &1_000_000_i128);
-            vault.deposit(&user_b, &1_000_i128);
+            vault.deposit(&user_a, &1_000_000_i128, &0_i128);
+            vault.deposit(&user_b, &1_000_i128, &0_i128);
 
             // Yield: doubles the adapter's USDC.
             StellarAssetClient::new(&env, &usdc_id).mint(&adapter_id, &1_001_000_i128);
@@ -2682,7 +2728,7 @@ mod tests {
         let (_env, _admin, user, _usdc, _musdc, _adapter, vault) = setup();
 
         let amount = 100_0000000_i128;
-        vault.deposit(&user, &amount);
+        vault.deposit(&user, &amount, &0_i128);
         let shares = vault.get_position(&user);
 
         // A floor set strictly above the actual payout (simulating the caller

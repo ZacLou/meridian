@@ -38,7 +38,7 @@ beforeEach(() => {
 });
 
 describe("buildCoordinatorDepositTx", () => {
-  it("calls the vault's deposit(caller, amount) with the correct ScVal args", async () => {
+  it("calls the vault's deposit(caller, amount, min_shares_out) with default minSharesOut=0", async () => {
     const result = await buildCoordinatorDepositTx(
       { contractId: CONTRACT_ID, network },
       WALLET,
@@ -53,12 +53,28 @@ describe("buildCoordinatorDepositTx", () => {
     expect(passedCaller).toBe(WALLET);
 
     // The built operation should be an InvokeHostFunction calling "deposit"
-    // with the caller's address and the i128 amount, in that order.
+    // with the caller's address, the i128 amount, and i128 min_shares_out (0n by default).
     const invocation = op.body().invokeHostFunctionOp().hostFunction();
     const args = invocation.invokeContract().args();
-    expect(args).toHaveLength(2);
+    expect(args).toHaveLength(3);
     expect(Address.fromScVal(args[0]!).toString()).toBe(WALLET);
     expect(args[1]).toEqual(nativeToScVal(100_000_000n, { type: "i128" }));
+    expect(args[2]).toEqual(nativeToScVal(0n, { type: "i128" }));
+  });
+
+  it("calls deposit with caller-supplied minSharesOut", async () => {
+    await buildCoordinatorDepositTx(
+      { contractId: CONTRACT_ID, network },
+      WALLET,
+      100_000_000n,
+      95_000_000n
+    );
+
+    const [, , op] = vi.mocked(prepareSorobanTx).mock.calls[0]!;
+    const invocation = op.body().invokeHostFunctionOp().hostFunction();
+    const args = invocation.invokeContract().args();
+    expect(args).toHaveLength(3);
+    expect(args[2]).toEqual(nativeToScVal(95_000_000n, { type: "i128" }));
   });
 
   it("throws without calling prepareSorobanTx for a non-positive amount", async () => {
@@ -76,6 +92,18 @@ describe("buildCoordinatorDepositTx", () => {
         -1n
       )
     ).rejects.toThrow(/amount must be positive/);
+    expect(prepareSorobanTx).not.toHaveBeenCalled();
+  });
+
+  it("throws without calling prepareSorobanTx for a negative minSharesOut", async () => {
+    await expect(
+      buildCoordinatorDepositTx(
+        { contractId: CONTRACT_ID, network },
+        WALLET,
+        100_000_000n,
+        -1n
+      )
+    ).rejects.toThrow(/minSharesOut must be non-negative/);
     expect(prepareSorobanTx).not.toHaveBeenCalled();
   });
 });

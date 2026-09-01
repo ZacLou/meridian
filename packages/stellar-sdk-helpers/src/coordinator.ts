@@ -15,15 +15,21 @@ function i128(value: bigint): xdr.ScVal {
 
 /**
  * Build an unsigned deposit transaction that calls the coordinator vault's
- * `deposit(caller, amount)` function. The vault forwards USDC to its active
+ * `deposit(caller, amount, min_shares_out)` function. The vault forwards USDC to its active
  * adapter, which deploys it to the underlying protocol.
+ *
+ * `minSharesOut` is the slippage guard: the contract rejects the transaction
+ * with `SlippageExceeded` if the minted shares would fall below this value.
+ * Pass `0n` to disable slippage protection.
  */
 export async function buildCoordinatorDepositTx(
   config: CoordinatorConfig,
   walletAddress: string,
-  amount: bigint
+  amount: bigint,
+  minSharesOut: bigint = 0n
 ): Promise<{ xdr: string; fee: string }> {
   if (amount <= 0n) throw new Error("amount must be positive");
+  if (minSharesOut < 0n) throw new Error("minSharesOut must be non-negative");
   const contract = new Contract(config.contractId);
   return prepareSorobanTx(
     config.network,
@@ -31,7 +37,8 @@ export async function buildCoordinatorDepositTx(
     contract.call(
       "deposit",
       Address.fromString(walletAddress).toScVal(),
-      i128(amount)
+      i128(amount),
+      i128(minSharesOut)
     )
   );
 }

@@ -24,12 +24,13 @@ export async function handleDepositRequest(
   }
 
   try {
-    const { walletAddress, vaultId, amount } = parsed.data;
+    const { walletAddress, vaultId, amount, min_shares_out } = parsed.data;
     const result = await buildDepositTx(
       vaultId,
       walletAddress,
       amount,
-      APP_NETWORK
+      APP_NETWORK,
+      min_shares_out
     );
     return { status: 200, body: result };
   } catch (err) {

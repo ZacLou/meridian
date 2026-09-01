@@ -147,6 +147,7 @@ import {
 } from "../_lib/middleware.js";
 import {
   buildDepositTx,
+  buildWithdrawTx,
   runBlendAccrualKeeper,
   runMigrationKeeper,
   resolvePositions,
@@ -259,6 +260,30 @@ describe("POST /api/v1/tx/deposit", () => {
     expect(buildDepositTx).toHaveBeenCalledOnce();
   });
 
+  it("accepts and forwards min_shares_out in deposit request", async () => {
+    const res = makeRes();
+    await depositHandler(
+      fakeReq({
+        method: "POST",
+        body: {
+          walletAddress: PUBKEY,
+          vaultId: "blend-usdc-fixed",
+          amount: "10",
+          min_shares_out: "9.5",
+        },
+      }),
+      res
+    );
+    expect(res.statusCode).toBe(200);
+    expect(buildDepositTx).toHaveBeenCalledWith(
+      "blend-usdc-fixed",
+      PUBKEY,
+      "10",
+      expect.anything(),
+      "9.5"
+    );
+  });
+
   it("surfaces builder errors as 500", async () => {
     vi.mocked(buildDepositTx).mockRejectedValueOnce(
       new Error("USDC trustline missing")
@@ -310,6 +335,30 @@ describe("POST /api/v1/tx/withdraw", () => {
       res
     );
     expect(res.body).toEqual({ xdr: "WITHDRAW_XDR", fee: "100" });
+  });
+
+  it("accepts and forwards min_usdc_out in withdraw request", async () => {
+    const res = makeRes();
+    await withdrawHandler(
+      fakeReq({
+        method: "POST",
+        body: {
+          walletAddress: PUBKEY,
+          vaultId: "blend-usdc-fixed",
+          shares: "5",
+          min_usdc_out: "4.8",
+        },
+      }),
+      res
+    );
+    expect(res.statusCode).toBe(200);
+    expect(buildWithdrawTx).toHaveBeenCalledWith(
+      "blend-usdc-fixed",
+      PUBKEY,
+      "5",
+      expect.anything(),
+      "4.8"
+    );
   });
 });
 

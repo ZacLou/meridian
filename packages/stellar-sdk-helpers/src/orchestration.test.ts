@@ -87,7 +87,18 @@ describe("buildDepositTx", () => {
     expect(buildCoordinatorDepositTx).toHaveBeenCalledWith(
       { contractId: VAULT_CONTRACT, network },
       WALLET,
-      100_000_000n
+      100_000_000n,
+      0n
+    );
+  });
+
+  it("passes minSharesOut when supplied", async () => {
+    await buildDepositTx("meridian-usdc", WALLET, "10", network, "9.5");
+    expect(buildCoordinatorDepositTx).toHaveBeenCalledWith(
+      { contractId: VAULT_CONTRACT, network },
+      WALLET,
+      100_000_000n,
+      95_000_000n
     );
   });
 
@@ -111,12 +122,12 @@ describe("buildWithdrawTx", () => {
   });
 
   it("forwards min_usdc_out as stroops to buildCoordinatorWithdrawTx", async () => {
-    await buildWithdrawTx("meridian-usdc", WALLET, "5", network, "0.5");
+    await buildWithdrawTx("meridian-usdc", WALLET, "5", network, "4.8");
     expect(buildCoordinatorWithdrawTx).toHaveBeenCalledWith(
       { contractId: VAULT_CONTRACT, network },
       WALLET,
       50_000_000n,
-      5_000_000n
+      48_000_000n
     );
   });
 

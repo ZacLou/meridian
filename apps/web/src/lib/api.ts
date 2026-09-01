@@ -67,6 +67,7 @@ export const api = {
     walletAddress: string;
     vaultId: string;
     amount: string;
+    min_shares_out?: string;
   }) =>
     apiFetch<{ xdr: string; fee: string }>("/api/v1/tx/deposit", {
       method: "POST",
@@ -76,6 +77,7 @@ export const api = {
     walletAddress: string;
     vaultId: string;
     shares: string;
+    min_usdc_out?: string;
   }) =>
     apiFetch<{ xdr: string; fee: string }>("/api/v1/tx/withdraw", {
       method: "POST",

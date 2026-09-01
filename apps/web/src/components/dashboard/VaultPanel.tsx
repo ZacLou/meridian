@@ -69,14 +69,52 @@ export function VaultPanel() {
 
   async function handleDeposit() {
     if (!amount || !bestVault) return;
-    const ok = await deposit(amount, bestVault.id, bestVault.asset);
+    // Only a position actually held in bestVault carries a share price
+    // relevant to this deposit: `position` above can fall back to a
+    // different vault's entry, and a first-time depositor has none at all.
+    // In both cases there's no reliable price to derive a floor from, so
+    // the deposit goes through with no slippage protection (min_shares_out
+    // omitted, which the contract treats as "0") rather than guessing a
+    // wrong floor that could revert every legitimate deposit with
+    // SlippageExceeded — a 1:1 fallback assumption is wrong the moment the
+    // vault has accrued any yield past inception.
+    const bestVaultPosition = positions.find((p) => p.vaultId === bestVault.id);
+    const numAmount = parseFloat(amount);
+    const minSharesOut =
+      bestVaultPosition &&
+      bestVaultPosition.shares > 0 &&
+      bestVaultPosition.deposited > 0
+        ? Math.max(
+            0,
+            ((numAmount * bestVaultPosition.shares) /
+              bestVaultPosition.deposited) *
+              0.995
+          ).toFixed(7)
+        : undefined;
+    const ok = await deposit(
+      amount,
+      bestVault.id,
+      bestVault.asset,
+      minSharesOut
+    );
     if (ok) setAmount("");
   }
 
   async function handleWithdraw() {
     if (!amount || !bestVault || !position) return;
     if (parseFloat(amount) > position.shares) return;
-    const ok = await withdraw(amount, position.vaultId, bestVault.asset);
+    const numShares = parseFloat(amount);
+    const expectedUsdc =
+      position.shares > 0
+        ? (numShares * position.deposited) / position.shares
+        : numShares;
+    const minUsdcOut = Math.max(0, expectedUsdc * 0.995).toFixed(7);
+    const ok = await withdraw(
+      amount,
+      position.vaultId,
+      bestVault.asset,
+      minUsdcOut
+    );
     if (ok) setAmount("");
   }
 
