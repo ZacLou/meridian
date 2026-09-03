@@ -976,6 +976,10 @@ export async function runMigrationKeeper(
     // on the real path.
     let hasMatchingSnapshot = deps.submitMigration != null;
     let snapshotReadFailed = false;
+    // #699: Capture the snapshot's adapter so the preservation check below
+    // can decide whether to keep it even when findBestCandidate returned a
+    // different "best" candidate this run.
+    let existingSnapshotAdapter: string | null = null;
     if (!hasMatchingSnapshot) {
       try {
         const snapshot = (await simulateView(
@@ -984,7 +988,8 @@ export async function runMigrationKeeper(
           config.network.passphrase,
           "get_migration_snapshot"
         )) as { adapter: string } | null;
-        hasMatchingSnapshot = snapshot?.adapter === best.adapterId;
+        existingSnapshotAdapter = snapshot?.adapter ?? null;
+        hasMatchingSnapshot = existingSnapshotAdapter === best.adapterId;
       } catch (err) {
         // A genuine "no snapshot" (or one for a different adapter) traps
         // with MigrationNotInitialized, which is not a transient failure by
@@ -998,6 +1003,144 @@ export async function runMigrationKeeper(
         // instead, same as this file's other on-chain read checks.
         hasMatchingSnapshot = false;
         snapshotReadFailed = isTransientKeeperError(err);
+      }
+    }
+
+    // #699: If an active snapshot exists for a different adapter than the
+    // freshly-derived "best", check whether that snapshotted adapter still
+    // clears minImprovementBps against the current rate. If it does,
+    // prefer completing the existing migration over switching to a newer
+    // candidate: without this, alternating rates between two adapters
+    // across scheduled runs would overwrite the already-begun snapshot on
+    // each run and reset the ledger-gap cooldown, so a real, sustained
+    // migration opportunity could in principle never reach
+    // migrate_adapter. Only let the snapshot lapse (and pick a new
+    // candidate) once the snapshotted adapter's rate genuinely stops
+    // clearing the threshold.
+    if (
+      !hasMatchingSnapshot &&
+      existingSnapshotAdapter &&
+      existingSnapshotAdapter !== vault.currentAdapterId
+    ) {
+      // Reverse-lookup the snapshot adapter's protocol from the configured
+      // candidate adapters. If it's no longer configured, we can't query
+      // its rate, so fall through to begin_migration for the fresh best.
+      const snapshotProtocol = Object.entries(config.candidateAdapters).find(
+        ([, id]) => id === existingSnapshotAdapter
+      )?.[0];
+
+      if (snapshotProtocol) {
+        try {
+          // The snapshotted adapter's rate and the vault's current rate
+          // are queried concurrently: they're independent reads, so
+          // running them in sequence would needlessly double the latency
+          // of this check. Each is retried individually via
+          // withKeeperRetry, same as findBestCandidate's own candidate
+          // evaluation.
+          const [snapshotRateResult, currentRateResult] = await Promise.all([
+            withKeeperRetry(
+              async () =>
+                rateSource({
+                  protocol: snapshotProtocol,
+                  adapterId: existingSnapshotAdapter,
+                  poolId: await resolveCandidatePool(existingSnapshotAdapter),
+                  ...(vault.assetId !== undefined && {
+                    assetId: vault.assetId,
+                  }),
+                }),
+              {
+                maxAttempts: config.maxAttempts,
+                baseDelayMs: config.baseDelayMs,
+                deadlineAt,
+              },
+              logger,
+              {
+                vaultId: vault.vaultId,
+                adapterId: existingSnapshotAdapter,
+                protocol: snapshotProtocol,
+                stage: "evaluate",
+              },
+              sleepFn,
+              isTransientKeeperError,
+              "migration-keeper"
+            ),
+            withKeeperRetry(
+              () =>
+                rateSource({
+                  protocol: vault.currentProtocol,
+                  adapterId: vault.currentAdapterId,
+                  poolId: vault.currentPoolId,
+                  ...(vault.assetId !== undefined && {
+                    assetId: vault.assetId,
+                  }),
+                }),
+              {
+                maxAttempts: config.maxAttempts,
+                baseDelayMs: config.baseDelayMs,
+                deadlineAt,
+              },
+              logger,
+              {
+                vaultId: vault.vaultId,
+                adapterId: vault.currentAdapterId,
+                protocol: vault.currentProtocol,
+                stage: "evaluate",
+              },
+              sleepFn,
+              isTransientKeeperError,
+              "migration-keeper"
+            ),
+          ]);
+
+          const snapshotRate = snapshotRateResult.value;
+          const currentRate = currentRateResult.value;
+
+          if (
+            isUsableRate(snapshotRate) &&
+            isUsableRate(currentRate) &&
+            snapshotRate - currentRate >= config.minImprovementBps
+          ) {
+            // The snapshotted adapter still clears the threshold: override
+            // best so the existing begin_migration / migrate_adapter flow
+            // below completes it instead of overwriting the snapshot with
+            // a begin_migration for the new best candidate.
+            logger.info(
+              "[migration-keeper] preserving active migration snapshot (#699)",
+              {
+                vaultId: vault.vaultId,
+                snapshotAdapterId: existingSnapshotAdapter,
+                snapshotProtocol,
+                overriddenBestAdapterId: best.adapterId,
+                overriddenBestProtocol: best.protocol,
+                snapshotImprovementBps: snapshotRate - currentRate,
+                overriddenBestImprovementBps: best.improvementBps,
+              }
+            );
+            best.adapterId = existingSnapshotAdapter;
+            best.protocol = snapshotProtocol;
+            best.improvementBps = snapshotRate - currentRate;
+            hasMatchingSnapshot = true;
+          }
+          // If the snapshot's adapter no longer clears the threshold,
+          // hasMatchingSnapshot stays false and begin_migration for the
+          // fresh best runs below — exactly the desired behaviour when the
+          // snapshotted adapter's rate has genuinely decayed.
+        } catch (err) {
+          // A transient failure during the snapshot's rate lookup must not
+          // block the migration entirely: the fresh best from
+          // findBestCandidate is still valid, so fall through to
+          // begin_migration for it. The snapshot will be overwritten,
+          // which is acceptable — the alternative (skipping the migration)
+          // is strictly worse for liveness.
+          logger.warn(
+            "[migration-keeper] snapshot rate lookup failed; falling through to fresh candidate (#699)",
+            {
+              vaultId: vault.vaultId,
+              snapshotAdapterId: existingSnapshotAdapter,
+              error: errorMessage(err),
+            }
+          );
+        }
       }
     }
 
