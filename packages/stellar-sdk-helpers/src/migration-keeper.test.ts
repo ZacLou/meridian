@@ -1531,6 +1531,102 @@ describe("runMigrationKeeper", () => {
     ]);
   });
 
+  // Coverage for the branch where candidates is empty but a pinned snapshot
+  // exists (the pinned adapter is the only non-current candidate).
+  it("migrates via pinned candidate when it is the only non-current candidate (#699)", async () => {
+    const server = makeServer();
+    stellarMocks.getRpcServer.mockReturnValue(server);
+    stellarMocks.waitForTransaction.mockResolvedValue({ ledger: 321 });
+
+    // Only one candidate adapter, which is also the pinned snapshot adapter.
+    const configWithOneCandidate: MigrationKeeperConfig = {
+      ...CONFIG,
+      candidateAdapters: {
+        blendv2: "CBLENDV2ADAPTER",
+      },
+    };
+
+    mockLiveAdapterAndActiveSnapshot(
+      DISCOVERED_VAULT.currentAdapterId,
+      "CBLENDV2ADAPTER"
+    );
+
+    const rateSource = vi.fn(async ({ adapterId }: { adapterId: string }) => {
+      if (adapterId === "CBLENDADAPTER") return 500;
+      if (adapterId === "CBLENDV2ADAPTER") return 600; // 100 bps improvement, clears 50
+      return null;
+    });
+
+    const result = await runMigrationKeeper(configWithOneCandidate, {
+      logger: logger(),
+      discoverVaults: async () => ({
+        vaults: [DISCOVERED_VAULT],
+        failures: [],
+      }),
+      rateSource,
+      resolveCandidatePool: async () => "CSOMEPOOL",
+      sleep: vi.fn(),
+    });
+
+    // migrate_adapter should have been submitted for the pinned adapter.
+    expect(server.sendTransaction).toHaveBeenCalledOnce();
+    expect(result.migrations).toHaveLength(1);
+    expect(result.migrations[0]).toMatchObject({
+      vaultId: "meridian-usdc",
+      fromAdapterId: "CBLENDADAPTER",
+      toAdapterId: "CBLENDV2ADAPTER",
+      toProtocol: "blendv2",
+      improvementBps: 100,
+    });
+  });
+
+  // Coverage for clearsImprovementThreshold at the exact boundary.
+  it("preserves a snapshot whose improvement is exactly at the threshold boundary (#699)", async () => {
+    const server = makeServer();
+    stellarMocks.getRpcServer.mockReturnValue(server);
+    stellarMocks.waitForTransaction.mockResolvedValue({ ledger: 321 });
+
+    const configWithTwoCandidates: MigrationKeeperConfig = {
+      ...CONFIG,
+      candidateAdapters: {
+        defindex: "CDEFINDEXADAPTER",
+        blendv2: "CBLENDV2ADAPTER",
+      },
+    };
+
+    mockLiveAdapterAndActiveSnapshot(
+      DISCOVERED_VAULT.currentAdapterId,
+      "CBLENDV2ADAPTER"
+    );
+
+    // blendv2 rate = 550, current = 500, improvement = 50 (exactly at threshold).
+    const rateSource = vi.fn(async ({ adapterId }: { adapterId: string }) => {
+      if (adapterId === "CBLENDADAPTER") return 500;
+      if (adapterId === "CDEFINDEXADAPTER") return 700;
+      if (adapterId === "CBLENDV2ADAPTER") return 550;
+      return null;
+    });
+
+    const result = await runMigrationKeeper(configWithTwoCandidates, {
+      logger: logger(),
+      discoverVaults: async () => ({
+        vaults: [DISCOVERED_VAULT],
+        failures: [],
+      }),
+      rateSource,
+      resolveCandidatePool: async () => "CSOMEPOOL",
+      sleep: vi.fn(),
+    });
+
+    // The pinned candidate clears the threshold (>=), so it should be preferred.
+    expect(server.sendTransaction).toHaveBeenCalledOnce();
+    expect(result.migrations).toHaveLength(1);
+    expect(result.migrations[0]).toMatchObject({
+      toAdapterId: "CBLENDV2ADAPTER",
+      improvementBps: 50,
+    });
+  });
+
   it("releases the submission lease after begin_migration so a later run isn't blocked", async () => {
     const server = makeServer();
     stellarMocks.getRpcServer.mockReturnValue(server);
