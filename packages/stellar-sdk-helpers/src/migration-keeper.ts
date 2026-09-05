@@ -575,8 +575,15 @@ async function findBestCandidate(
   // future paths needing to reason about "the current best vs. an existing
   // on-chain commitment" reuse one generalized candidate-evaluation pass
   // without duplicating rate fetches or threshold comparisons (#699).
+  //
+  // The pinned adapter is excluded from the regular `candidates` list so
+  // it is never evaluated twice: it appears once as a pinned entry (added
+  // below), not once as a regular candidate and once as pinned. When the
+  // snapshot adapter is not in the configured candidates at all,
+  // candidates is unchanged (no entry to de-duplicate).
   const candidates = Object.entries(config.candidateAdapters).filter(
-    ([, adapterId]) => adapterId !== vault.currentAdapterId
+    ([, adapterId]) =>
+      adapterId !== vault.currentAdapterId && adapterId !== pinned?.adapterId
   );
   if (candidates.length === 0 && !pinned) {
     return {
@@ -662,17 +669,28 @@ async function findBestCandidate(
     adapterId: string;
     pinned: boolean;
   };
-  const entries: CandidateEntry[] = candidates.map(
-    ([protocol, adapterId]) => ({ protocol, adapterId, pinned: false })
-  );
+  const entries: CandidateEntry[] = candidates.map(([protocol, adapterId]) => ({
+    protocol,
+    adapterId,
+    pinned: false,
+  }));
   if (pinned) {
-    entries.push({ protocol: pinned.protocol, adapterId: pinned.adapterId, pinned: true });
+    entries.push({
+      protocol: pinned.protocol,
+      adapterId: pinned.adapterId,
+      pinned: true,
+    });
   }
 
   const settled = await Promise.allSettled(
     entries.map(async (entry) => {
       const result = await evaluate(entry.protocol, entry.adapterId);
-      return { protocol: entry.protocol, adapterId: entry.adapterId, rate: result.value, pinned: entry.pinned };
+      return {
+        protocol: entry.protocol,
+        adapterId: entry.adapterId,
+        rate: result.value,
+        pinned: entry.pinned,
+      };
     })
   );
 
@@ -685,10 +703,9 @@ async function findBestCandidate(
   // A pinned candidate that clears the threshold wins, full stop — the
   // policy is "complete the existing migration rather than reset the
   // cooldown", and the improvement delta between it and a different "best"
-  // is irrelevant because switching would restart the timer. This flag
-  // prevents a higher-improvement non-pinned candidate from overriding
-  // a pinned candidate that also clears the threshold.
-  let pinnedClears = false;
+  // is irrelevant because switching would restart the timer. The early
+  // `break` below prevents a higher-improvement non-pinned candidate from
+  // overriding a pinned candidate that also clears the threshold.
   let firstFailure:
     { protocol: string; adapterId: string; reason: unknown } | undefined;
   let anyRateKnown = false;
@@ -709,7 +726,11 @@ async function findBestCandidate(
         protocol: entry.protocol,
         error: errorMessage(outcome.reason),
       });
-      firstFailure ??= { protocol: entry.protocol, adapterId: entry.adapterId, reason: outcome.reason };
+      firstFailure ??= {
+        protocol: entry.protocol,
+        adapterId: entry.adapterId,
+        reason: outcome.reason,
+      };
       continue;
     }
     const { rate } = outcome.value;
@@ -717,7 +738,10 @@ async function findBestCandidate(
     anyRateKnown = true;
 
     const improvementBps = rate - currentRate;
-    if (!clearsImprovementThreshold(rate, currentRate, config.minImprovementBps)) continue;
+    if (
+      !clearsImprovementThreshold(rate, currentRate, config.minImprovementBps)
+    )
+      continue;
 
     // Pinned candidate clearing the threshold wins unconditionally:
     // completing the existing migration is the only way to reach
@@ -728,17 +752,24 @@ async function findBestCandidate(
     // has a marginally higher improvement — "the existing migration
     // survives" is the entire point of this mechanism.
     if (entry.pinned) {
-      pinnedClears = true;
-      best = { protocol: entry.protocol, adapterId: entry.adapterId, improvementBps };
+      best = {
+        protocol: entry.protocol,
+        adapterId: entry.adapterId,
+        improvementBps,
+      };
       break;
     }
     if (!best || improvementBps > best.improvementBps) {
-      best = { protocol: entry.protocol, adapterId: entry.adapterId, improvementBps };
+      best = {
+        protocol: entry.protocol,
+        adapterId: entry.adapterId,
+        improvementBps,
+      };
     }
   }
 
   if (best) {
-    return { best, ...(pinnedClears && { skipReason: undefined }) };
+    return { best };
   }
   // A failed candidate must never block a valid decision reached from a
   // different candidate, this applies just as much when that decision is
@@ -978,7 +1009,10 @@ export async function runMigrationKeeper(
             config.candidateAdapters
           ).find(([, id]) => id === existingSnapshotAdapter)?.[0];
           if (snapshotProtocol) {
-            pinned = { adapterId: existingSnapshotAdapter, protocol: snapshotProtocol };
+            pinned = {
+              adapterId: existingSnapshotAdapter,
+              protocol: snapshotProtocol,
+            };
           }
         }
       } catch (err) {
