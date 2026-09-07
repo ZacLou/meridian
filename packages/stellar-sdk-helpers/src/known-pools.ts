@@ -34,6 +34,8 @@ export const KNOWN_POOLS: {
       name: "Blend Capital",
       protocol: "blend",
       label: "Fixed Pool",
+      contractId: "CAJJZSGMMM3PD7N33TAPHGBUGTB43OC73HVIK2L2G6BNGGGYOSSYBXBD",
+      assetId: "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75",
     },
     "3a61420f-6f6e-45f9-accc-8d23f5a32d33": {
       id: "blend-eurc-fixed",
@@ -53,6 +55,18 @@ export const KNOWN_POOLS: {
       protocol: "blend",
       label: "Variable Pool",
     },
+    // Meridian coordinator vault: protocol-agnostic entry point. The vault
+    // routes to its active adapter (currently Blend) transparently. Not a
+    // DeFiLlama pool, so keyed the same way as the testnet entry rather than
+    // by UUID.
+    "meridian-usdc": {
+      id: "meridian-usdc",
+      name: "Meridian",
+      protocol: "meridian",
+      label: "USDC Vault",
+      contractId: "CBRAD5MD7CCXNXRLRGTRKG4NNZKR3N643VUEBNJGWB2L6KLZDLFWMXHQ",
+      assetId: "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75",
+    },
   },
   testnet: {
     // Meridian coordinator vault: protocol-agnostic entry point. The vault
@@ -63,7 +77,7 @@ export const KNOWN_POOLS: {
       name: "Meridian",
       protocol: "meridian",
       label: "USDC Vault",
-      contractId: "CBOE7JPROCMUKQ4NJWPKCLBBQGHLTGV4X3463DHK4D7KX6KWXGZETAJL",
+      contractId: "CAIQBVLBIUWQGE6DQUHDMZ2QWI7QP6KTCN7GP2BIZ6JZC4ES47JO4SSM",
       assetId: "CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU",
       asset: "USDC",
     },

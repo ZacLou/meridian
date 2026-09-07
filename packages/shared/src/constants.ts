@@ -31,7 +31,7 @@ export const USDC_ISSUER: Record<string, string> = {
 // not before — this file describes what's actually live, not what the code
 // supports.
 export const MUSDC_ISSUER: Record<string, string> = {
-  testnet: "GBLYQ5EHXMMULOA7KA4KK2S5Q5GTTWYFVSC3FKLXRLH34EJX35BIAL35",
+  testnet: "",
   mainnet: "",
 };
 
@@ -53,21 +53,27 @@ export const CONTRACT_ADDRESSES = {
     usdc: "CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU",
     // Stellar Asset Contract for Circle's testnet EURC (issuer: GB3Q6QDZYTHWT7...).
     eurc: "CCUUDM434BMZMYWYDITHFXHDMIVTGGD6T2I5UKNX5BSLXLW7HVR4MCGZ",
-    musdc: "CCSYXC4SDCPTGENHM6CSQY4HMSZOPOY5TJW4QYYLE5RDBUBJX4N7ZHV5",
-    // Redeployed for #514: the previous vault (CBQYEHWIRJWIPWCJFQZAOP3VAZHRWFGAUS5GZHWFDDYKMFHJ5S3YS2Q5)
-    // predates `migrate_adapter` and was never redeployed since #464/#507
-    // added it. See apps/docs/operations/testnet-deployment.md's "Vault
-    // migration history" for the old address, why it's stale, and the
-    // pre-cutover withdrawal window for anyone still holding a position there.
-    vault: "CBOE7JPROCMUKQ4NJWPKCLBBQGHLTGV4X3463DHK4D7KX6KWXGZETAJL",
+    musdc: "CCU7RWT246CODH2455WTSGUYKXRL3J4F5C2QXIEVCN7QHCRC4BAWGKV7",
+    // Redeployed for #701: the previous vault
+    // (CBOQTI3C7UHTBRHSF3AJEQYXDINJ354XRWIZKSEV6PFIEUSJF2YWZPME) predated
+    // #704/#705/#711/#710 (TTL management, event emission, migration-keeper
+    // fix, admin slippage cap and timelock), all landed after that vault was
+    // last deployed. Built from a Linux CI job rather than locally, so its
+    // bytecode is guaranteed to match what
+    // .github/workflows/verify-contract-addresses.yml independently
+    // rebuilds and checks (a Windows-built WASM cannot be guaranteed
+    // byte-identical). See apps/docs/operations/testnet-deployment.md's
+    // "Vault migration history" for the old address and its (empty)
+    // pre-cutover balance.
+    vault: "CAIQBVLBIUWQGE6DQUHDMZ2QWI7QP6KTCN7GP2BIZ6JZC4ES47JO4SSM",
   },
   mainnet: {
     blend: {
-      // Mainnet Blend pool addresses are resolved at runtime via DeFiLlama pool
-      // UUIDs in KNOWN_POOLS (packages/stellar-sdk-helpers/src/known-pools.ts).
-      // A single pool address is not sufficient; each ranked pool has its own
-      // contract. Populate per-pool addresses here before enabling mainnet tx building.
-      pool: "",
+      // Blend mainnet USDC pool (Fixed V2), the pool meridian's mainnet vault
+      // is wired to. Other ranked pools still resolve via DeFiLlama pool
+      // UUIDs in KNOWN_POOLS (packages/stellar-sdk-helpers/src/known-pools.ts)
+      // rather than a hardcoded address here.
+      pool: "CAJJZSGMMM3PD7N33TAPHGBUGTB43OC73HVIK2L2G6BNGGGYOSSYBXBD",
     },
     defindex: {
       factory: "",
@@ -77,8 +83,15 @@ export const CONTRACT_ADDRESSES = {
     usdc: "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75",
     // Stellar Asset Contract for Circle's mainnet EURC (issuer: GDHU6WRG4IEQ...).
     eurc: "CDTKPWPLOURQA2SGTKTUQOWRCBZEORB4BWBOMJ3D3ZTQQSGE5F6JBQLV",
-    musdc: "",
-    vault: "",
+    musdc: "CAEJJPN73VOEWUVCXCXMIXOHMFLUXAYVFMCTCJHQFI5R2NIB2S5YTOFL",
+    // The blend-adapter wired to this vault is
+    // CBNKERYAG7VZNBH2V3TF5JBXLD3MXLVQW5GG4AO445EUDCPKP4D2DDP2, discoverable
+    // at runtime via vault.get_adapter() rather than tracked separately here.
+    // Redeployed from the original CCJZCEF...-address deploy: that one was
+    // built locally on Windows and did not reproduce on a genuine Linux
+    // rebuild, so it could never be verified against source (see the
+    // "Mainnet deployment record" in apps/docs/operations/mainnet-deployment.md).
+    vault: "CBRAD5MD7CCXNXRLRGTRKG4NNZKR3N643VUEBNJGWB2L6KLZDLFWMXHQ",
   },
 } as const;
 
@@ -90,7 +103,11 @@ export const STELLAR_NETWORKS = {
   },
   mainnet: {
     network: "mainnet" as const,
-    rpcUrl: "https://soroban-mainnet.stellar.org",
+    // Unlike testnet, the Stellar Development Foundation does not run a
+    // public mainnet RPC. This is a third-party public endpoint (see
+    // https://sorobanrpc.com for others); revisit before relying on it for
+    // anything beyond occasional CLI use, e.g. own infra or a paid provider.
+    rpcUrl: "https://mainnet.sorobanrpc.com",
     passphrase: "Public Global Stellar Network ; September 2015",
   },
 };

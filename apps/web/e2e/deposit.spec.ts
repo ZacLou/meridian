@@ -1,4 +1,9 @@
-import { test, expect, getSignedXdrs } from "./fixtures";
+import {
+  test,
+  expect,
+  getSignedXdrs,
+  acknowledgeRiskDisclosure,
+} from "./fixtures";
 
 test.describe("deposit", () => {
   test("builds a real deposit transaction against the real API", async ({
@@ -20,6 +25,10 @@ test.describe("deposit", () => {
       .getByRole("button", { name: "Connect Wallet" })
       .click();
     await expect(page.getByTestId("vault-tab-deposit")).toBeVisible();
+
+    await expect(page.getByTestId("deposit-risk-disclosure")).toBeVisible();
+    await acknowledgeRiskDisclosure(page);
+    await expect(page.getByTestId("deposit-risk-disclosure")).toBeHidden();
 
     await page.getByPlaceholder("0.00").fill("10");
     await page.getByTestId("vault-deposit-submit").click();
